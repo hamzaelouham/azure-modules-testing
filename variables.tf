@@ -1,3 +1,11 @@
+variable "subscription_id" {
+  description = "Azure Subscription ID"
+  type        = string
+  default     = ""
+
+}
+
+
 # Resource Group
 variable "resource_group_name" {
   description = "Name of the resource group"
@@ -60,15 +68,9 @@ variable "worker_vm_size" {
 variable "admin_username" {
   description = "Admin username for the VMs"
   type        = string
-  default     = "azureuser"
+  default     = "k8sadmin"
 }
 
-variable "admin_password" {
-  description = "Admin password for the VMs (min 12 chars, must include uppercase, lowercase, number, and special char)"
-  type        = string
-  sensitive   = true
-  default     = "Password123!@#"
-}
 
 variable "os_disk_size_gb" {
   description = "Size of the OS disk in GB"

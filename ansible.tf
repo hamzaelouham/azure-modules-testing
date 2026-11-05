@@ -5,26 +5,20 @@
 # Generate Ansible inventory from Terraform outputs
 resource "local_file" "ansible_inventory" {
   content = templatefile("${path.module}/templates/inventory.tftpl", {
-    master_ip            = azurerm_network_interface.master.private_ip_address
-    worker_ips           = azurerm_network_interface.worker[*].private_ip_address
+    master_ip            = module.master.azurerm_network_interface.nic.private_ip_address
+    worker_ips           = module.worker[*].azurerm_network_interface.nic.private_ip_address
     ssh_user             = var.admin_username
     ssh_private_key_path = var.ssh_private_key_path
   })
   filename        = "${path.module}/ansible/inventory"
   file_permission = "0600"
 
-  depends_on = [
-    azurerm_linux_virtual_machine.master,
-    azurerm_linux_virtual_machine.worker
-  ]
+  depends_on = [module.master, module.worker]
 }
 
 # Wait for VMs to be ready before running Ansible
 resource "null_resource" "wait_for_vms" {
-  depends_on = [
-    azurerm_linux_virtual_machine.master,
-    azurerm_linux_virtual_machine.worker
-  ]
+  depends_on = [module.master, module.worker]
 
   # Wait for VMs to be fully booted
   provisioner "local-exec" {

@@ -10,7 +10,7 @@ master
 worker
 
 [all:vars]
-ansible_user=azureuser
+ansible_user=k8sadmin
 ansible_ssh_private_key_file=~/.ssh/ansible_id
 ansible_become=true
 ansible_ssh_common_args='-o StrictHostKeyChecking=no'
