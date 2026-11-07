@@ -73,31 +73,8 @@ resource "azurerm_nat_gateway_public_ip_association" "main" {
 
 # Associate NAT Gateway with Subnet
 resource "azurerm_subnet_nat_gateway_association" "main" {
-  subnet_id      = module.vnet.subnet_ids["snet-vm"].id
+  subnet_id      = module.vnet.subnet_ids["snet-vm"]
   nat_gateway_id = azurerm_nat_gateway.main.id
 }
 
-# Peering with existing VNet
-data "azurerm_virtual_network" "peer" {
-  name                = var.peer_vnet_name
-  resource_group_name = var.peer_vnet_resource_group
-}
-
-resource "azurerm_virtual_network_peering" "peer_to_new" {
-  name                      = "peer-to-new"
-  resource_group_name       = var.peer_vnet_resource_group
-  virtual_network_name      = data.azurerm_virtual_network.peer.name
-  remote_virtual_network_id = module.vnet.id
-}
-
-resource "azurerm_virtual_network_peering" "new_to_peer" {
-  name                      = "new-to-peer"
-  resource_group_name       = module.rg.name
-  virtual_network_name      = module.vnet.name
-  remote_virtual_network_id = data.azurerm_virtual_network.peer.id
-}
-
-resource "azurerm_subnet_network_security_group_association" "main" {
-  subnet_id                 = azurerm_subnet.module.vnet.subnet_ids["snet-vm"].id
-  network_security_group_id = azurerm_network_security_group.main.id
-}
+# NSG <-> subnet association is handled by the vnet module (associate_nsg defaults to true).

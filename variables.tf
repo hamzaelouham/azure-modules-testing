@@ -115,15 +115,3 @@ variable "tags" {
     Project     = "Kubernetes"
   }
 }
-
-variable "peer_vnet_name" {
-  description = "Name of the existing VNet to peer with"
-  type        = string
-  default     = "devopsVM-vnet"
-}
-
-variable "peer_vnet_resource_group" {
-  description = "Resource Group of the existing VNet to peer with"
-  type        = string
-  default     = "devops-group"
-}
