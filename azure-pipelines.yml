@@ -1,0 +1,107 @@
+# Terraform + Ansible pipeline for the test k8s cluster.
+#   Validate -> Plan -> Apply (waits for approval on the "k8s-test" environment)
+# One-time setup in Azure DevOps: see docs/azure-devops-pipeline.md
+
+trigger:
+  branches:
+    include: [main]
+  paths:
+    exclude: [docs/*, '*.md']
+
+pr:
+  branches:
+    include: [main]
+
+pool:
+  vmImage: ubuntu-24.04
+
+variables:
+  # Must be a literal here (not a variable group) so Azure DevOps can authorize it.
+  azureServiceConnection: azure-k8s-test
+  terraformVersion: 1.17.1
+
+  # Remote state. Create these before the first run (see docs/azure-devops-pipeline.md).
+  TF_STATE_RESOURCE_GROUP: rg-tfstate
+  TF_STATE_STORAGE_ACCOUNT: CHANGE_ME
+  TF_STATE_CONTAINER: tfstate
+  TF_STATE_KEY: azure-modules-testing.tfstate
+
+  # Secure files (Pipelines > Library > Secure files) holding the VM SSH key pair.
+  sshPrivateKeyFile: k8s-ssh-key
+  sshPublicKeyFile: k8s-ssh-key.pub
+
+stages:
+  # ---------------------------------------------------------------------------
+  - stage: Validate
+    jobs:
+      - job: validate
+        steps:
+          - template: pipelines/install-terraform.yml
+          - script: terraform fmt -check -recursive -diff
+            displayName: terraform fmt
+          - script: |
+              terraform init -backend=false -input=false
+              terraform validate
+            displayName: terraform validate
+
+  # ---------------------------------------------------------------------------
+  - stage: Plan
+    dependsOn: Validate
+    jobs:
+      - job: plan
+        steps:
+          - template: pipelines/install-terraform.yml
+          - template: pipelines/ssh-keys.yml
+          - task: AzureCLI@2
+            displayName: terraform plan
+            inputs:
+              azureSubscription: $(azureServiceConnection)
+              addSpnToEnvironment: true
+              scriptType: bash
+              scriptLocation: scriptPath
+              scriptPath: scripts/tf-ci.sh
+              arguments: plan -out=tfplan
+          # The lock file travels with the plan so apply uses the same providers.
+          - script: |
+              mkdir -p "$(Build.ArtifactStagingDirectory)/tfplan"
+              cp tfplan .terraform.lock.hcl "$(Build.ArtifactStagingDirectory)/tfplan/"
+            displayName: Stage plan
+            condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
+          - publish: $(Build.ArtifactStagingDirectory)/tfplan
+            artifact: tfplan
+            displayName: Publish plan
+            condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
+
+  # ---------------------------------------------------------------------------
+  - stage: Apply
+    dependsOn: Plan
+    # Never apply from pull requests; only from main.
+    condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - deployment: apply
+        # Add an "Approvals" check on this environment to gate the apply.
+        environment: k8s-test
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+                - download: current
+                  artifact: tfplan
+                - script: cp "$(Pipeline.Workspace)/tfplan/tfplan" "$(Pipeline.Workspace)/tfplan/.terraform.lock.hcl" .
+                  displayName: Restore plan
+                - template: pipelines/install-terraform.yml
+                - template: pipelines/ssh-keys.yml
+                - script: |
+                    command -v ansible-playbook || pipx install --include-deps ansible
+                    ansible-playbook --version
+                  displayName: Install Ansible
+                - task: AzureCLI@2
+                  displayName: terraform apply
+                  inputs:
+                    azureSubscription: $(azureServiceConnection)
+                    addSpnToEnvironment: true
+                    scriptType: bash
+                    scriptLocation: scriptPath
+                    scriptPath: scripts/tf-ci.sh
+                    arguments: apply -auto-approve tfplan

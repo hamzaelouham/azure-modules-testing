@@ -1,0 +1,8 @@
+steps:
+  - script: |
+      set -euo pipefail
+      if terraform version 2>/dev/null | head -1 | grep -qx "Terraform v$(terraformVersion)"; then exit 0; fi
+      curl -fsSLo /tmp/terraform.zip "https://releases.hashicorp.com/terraform/$(terraformVersion)/terraform_$(terraformVersion)_linux_amd64.zip"
+      sudo unzip -o -q /tmp/terraform.zip -d /usr/local/bin terraform
+      terraform version
+    displayName: Install Terraform $(terraformVersion)
