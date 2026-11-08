@@ -71,10 +71,9 @@ resource "azurerm_nat_gateway_public_ip_association" "main" {
   public_ip_address_id = azurerm_public_ip.nat.id
 }
 
+# NSG <-> subnet association is handled by the vnet module (associate_nsg defaults to true).
 # Associate NAT Gateway with Subnet
 resource "azurerm_subnet_nat_gateway_association" "main" {
   subnet_id      = module.vnet.subnet_ids["snet-vm"]
   nat_gateway_id = azurerm_nat_gateway.main.id
 }
-
-# NSG <-> subnet association is handled by the vnet module (associate_nsg defaults to true).
