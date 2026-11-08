@@ -20,9 +20,9 @@ variables:
   azureServiceConnection: azure-k8s-test
   terraformVersion: 1.17.1
 
-  # Remote state. Create these before the first run (see docs/azure-devops-pipeline.md).
+  # Remote state (created; see docs/azure-devops-pipeline.md).
   TF_STATE_RESOURCE_GROUP: rg-tfstate
-  TF_STATE_STORAGE_ACCOUNT: CHANGE_ME
+  TF_STATE_STORAGE_ACCOUNT: tfstate9498a810
   TF_STATE_CONTAINER: tfstate
   TF_STATE_KEY: azure-modules-testing.tfstate
 
