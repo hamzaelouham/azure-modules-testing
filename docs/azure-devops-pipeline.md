@@ -12,7 +12,18 @@
 
 ## One-time setup
 
-### 1. Remote state (not done yet)
+### Shortcut: `scripts/bootstrap-azure.sh`
+
+After you create the service connection (step 2), this does the Azure side of steps 1 and 2 in one go. It registers the resource providers, creates the state storage, gives the service connection Contributor on the subscription, migrates local state and writes the storage account name into the pipeline. It also checks your vCPU quota. It's safe to re-run.
+
+```bash
+az login   # as an Owner of the subscription
+scripts/bootstrap-azure.sh --sp <service-connection-app-or-object-id> --migrate --update-pipeline
+```
+
+The manual steps below are what it does.
+
+### 1. Remote state
 
 The pipeline keeps state in an Azure Storage blob. It writes `backend_override.tf` (gitignored) at run time, so local runs still use local state.
 
