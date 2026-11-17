@@ -42,14 +42,14 @@ variable "master_vm_name" {
 variable "master_vm_size" {
   description = "Size of the master VM"
   type        = string
-  default     = "Standard_B2s"
+  default     = "Standard_D2ls_v7"
 }
 
 # Worker Node Configuration
 variable "worker_count" {
   description = "Number of Kubernetes worker nodes"
   type        = number
-  default     = 2
+  default     = 1 # Free Trial caps each region at 4 vCPUs: master + 1 worker (Standard_B2s, 2 vCPUs each)
 }
 
 variable "worker_vm_name_prefix" {
@@ -61,7 +61,7 @@ variable "worker_vm_name_prefix" {
 variable "worker_vm_size" {
   description = "Size of the worker VMs"
   type        = string
-  default     = "Standard_B2s"
+  default     = "Standard_D2ls_v7"
 }
 
 # Common VM Configuration
@@ -114,16 +114,4 @@ variable "tags" {
     ManagedBy   = "Terraform"
     Project     = "Kubernetes"
   }
-}
-
-variable "peer_vnet_name" {
-  description = "Name of the existing VNet to peer with"
-  type        = string
-  default     = "devopsVM-vnet"
-}
-
-variable "peer_vnet_resource_group" {
-  description = "Resource Group of the existing VNet to peer with"
-  type        = string
-  default     = "devops-group"
 }

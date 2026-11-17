@@ -1,0 +1,19 @@
+# Downloads the VM SSH key pair and points the Terraform variables at it.
+# The paths are the same in every job on Microsoft-hosted agents, so a plan
+# made in one stage can be applied in another.
+steps:
+  - task: DownloadSecureFile@1
+    name: sshPrivateKey
+    displayName: Download SSH private key
+    inputs:
+      secureFile: $(sshPrivateKeyFile)
+  - task: DownloadSecureFile@1
+    name: sshPublicKey
+    displayName: Download SSH public key
+    inputs:
+      secureFile: $(sshPublicKeyFile)
+  - script: |
+      chmod 600 "$(sshPrivateKey.secureFilePath)"
+      echo "##vso[task.setvariable variable=TF_VAR_ssh_private_key_path]$(sshPrivateKey.secureFilePath)"
+      echo "##vso[task.setvariable variable=TF_VAR_ssh_public_key_path]$(sshPublicKey.secureFilePath)"
+    displayName: Set SSH key paths

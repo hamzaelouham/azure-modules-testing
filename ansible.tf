@@ -5,10 +5,11 @@
 # Generate Ansible inventory from Terraform outputs
 resource "local_file" "ansible_inventory" {
   content = templatefile("${path.module}/templates/inventory.tftpl", {
-    master_ip            = module.master.azurerm_network_interface.nic.private_ip_address
-    worker_ips           = module.worker[*].azurerm_network_interface.nic.private_ip_address
+    master_ip            = module.master.private_ip_address
+    master_public_ip     = module.master.public_ip_address
+    worker_ips           = module.worker[*].private_ip_address
     ssh_user             = var.admin_username
-    ssh_private_key_path = var.ssh_private_key_path
+    ssh_private_key_path = pathexpand(var.ssh_private_key_path)
   })
   filename        = "${path.module}/ansible/inventory"
   file_permission = "0600"
@@ -38,7 +39,7 @@ resource "null_resource" "run_ansible" {
   }
 
   provisioner "local-exec" {
-    command     = "ansible-playbook -i inventory k8s/k8s-main.yaml -e k8s_version=${var.k8s_version}"
+    command     = "ansible-playbook -i inventory k8s/setup/k8s-main.yaml -e k8s_version=${var.k8s_version}"
     working_dir = "${path.module}/ansible"
     environment = {
       ANSIBLE_HOST_KEY_CHECKING = "False"
