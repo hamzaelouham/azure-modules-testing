@@ -12,6 +12,8 @@ The input and output names below come from the module sources pinned in the code
 
 Work through the steps in order. Step 0 decides whether step 7 (state migration) applies to you.
 
+**Status (2026-11-05, second pass):** step 1 is done, step 2a is done, step 4.1 and 4.2 are done, steps 2b and 2c (`network.tf`), 5 (`outputs.tf`) and 6 (`ansible.tf`) are done, `terraform validate` passes, and the VM modules already pass `vm_name`, `vm_size`, `vm_admin_username`, `subnet_id` and `vm_tags`. `terraform init` has been run. The steps below are updated to cover only what is still open, plus the new findings (NAT outputs, VNet range override in `terraform.tfvars`, missing SSH key).
+
 ---
 
 ## Step 0: Check whether state exists
@@ -29,9 +31,9 @@ If the state is on another machine, copy it here or configure a remote backend f
 
 ---
 
-## Step 1: `main.tf` (providers)
+## Step 1: `main.tf` (providers) — done
 
-Fixes issue 9. azurerm 4.x and later require `subscription_id`. The `local` and `null` providers used in `ansible.tf` also need to be declared.
+Already applied; kept for reference. The regenerated `.terraform.lock.hcl` (azurerm 5.12.0, azapi 2.13.0, local 2.9.1, null 3.3.2) is untracked: **commit it**. azurerm 4.x and later require `subscription_id`. The `local` and `null` providers used in `ansible.tf` also need to be declared.
 
 ```hcl
 terraform {
@@ -65,7 +67,7 @@ provider "azurerm" {
 
 Delete the commented-out resource group block at the bottom of the file; it now lives in `rg.tf`.
 
-Add to `variables.tf`:
+`variables.tf` declares `subscription_id` with `default = ""`. Remove the default so a missing value fails at plan time instead of at provider configuration:
 
 ```hcl
 variable "subscription_id" {
@@ -80,11 +82,11 @@ After step 8, **commit the new `.terraform.lock.hcl`**. It is not git-ignored an
 
 ---
 
-## Step 2: `network.tf`
+## Step 2: `network.tf` and `terraform.tfvars`
 
-Fixes issues 3, 4 and 5.
+Fixes review issues 1, 3, 4 and 9.
 
-### 2a: Fix the `vnet` module arguments
+### 2a: Fix the `vnet` module arguments — done
 
 ```hcl
 module "vnet" {
@@ -124,7 +126,7 @@ module "vnet" {
 }
 ```
 
-### 2b: Fix the output references
+### 2b: Fix the output references — done
 
 `subnet_ids` is a map of plain ID strings, so drop the `.id`:
 
@@ -145,17 +147,29 @@ resource "azurerm_virtual_network_peering" "new_to_peer" {
 }
 ```
 
-### 2c: Delete the extra NSG association
+The same `.id` must also be dropped in `outputs.tf:42` (step 5). While here, either add `zones = ["1"]` to `azurerm_nat_gateway.main` or remove `zones` from `azurerm_public_ip.nat`, so the gateway and its public IP are in the same zone. The two `.id` uses in `vm.tf` go away with the root NICs in step 3.
+
+### 2c: Delete the extra NSG association — done
 
 Delete the whole `azurerm_subnet_network_security_group_association "main"` block at the end of `network.tf`. The module already creates this association as `subnet_nsg["snet-vm"]`, and Azure allows only one per subnet.
+
+### 2d: Stop `terraform.tfvars` from overriding the VNet range
+
+The local `terraform.tfvars` sets `vnet_address_space = ["10.0.0.0/16"]` and `subnet_address_prefixes = ["10.0.1.0/24"]`. The defaults are `10.1.x` on purpose: the peered `devopsVM-vnet` is very likely on Azure's default `10.0.0.0/16`, and peering fails on overlapping ranges. Delete those two lines (and, for an existing deployment, the `location`, `resource_group_name`, `master_vm_name` and `worker_vm_name_prefix` overrides, which each force replacement). Check the peer range with:
+
+```bash
+az network vnet show -g devops-group -n devopsVM-vnet --query addressSpace.addressPrefixes
+```
+
+Also delete the leftover comments copied from the old `.example` file ("Copy this to terraform.tfvars", the password rule).
 
 ---
 
 ## Step 3: `vm.tf` (rewrite)
 
-Fixes issues 1, 2 and 7.
+Fixes review issues 1, 6, 7 and 8.
 
-The module creates its own NIC (`<vm_name>-nic`), so **delete both `azurerm_network_interface` resources** (`master` and `worker`). Replace the whole file with:
+What is still missing in the current `vm.tf`: the root NICs are orphaned (the module creates its own `<vm_name>-nic`), and the locals are never passed to the modules, so the VMs get **no SSH key** (Azure rejects the VM, because password login is disabled), no cloud-init, the module's Ubuntu 24.04 image and a default-size `StandardSSD_LRS` disk. **Delete both `azurerm_network_interface` resources** (`master` and `worker`) and replace the whole file with:
 
 ```hcl
 locals {
@@ -233,9 +247,9 @@ Notes:
 
 ## Step 4: `variables.tf`
 
-Fixes issues 1 and 10.
+Fixes the security items in the review. Items 1 and 2 are done.
 
-1. **`admin_username`**: the module rejects `azureuser` as a reserved name. Change the default:
+1. **`admin_username`** (done): the module rejects `azureuser` as a reserved name. The default is now:
    ```hcl
    variable "admin_username" {
      description = "Admin username for the VMs"
@@ -245,7 +259,7 @@ Fixes issues 1 and 10.
    ```
    Any Ansible `group_vars`/`host_vars` that hard-code `azureuser` must change to match.
 
-2. **`admin_password`**: delete the variable. Nothing uses it, and its default is a password committed to git. If that password was ever used anywhere, rotate it.
+2. **`admin_password`** (done): delete the variable. Nothing uses it, and its default is a password committed to git. If that password was ever used anywhere, rotate it.
 
 3. **`allowed_ssh_source`**: remove the `"*"` default so a value has to be chosen:
    ```hcl
@@ -257,15 +271,17 @@ Fixes issues 1 and 10.
    ```
    The VMs have no public IP and are reached through the peered VNet, so the peer VNet's address range is a good value.
 
-4. Add `subscription_id` (see step 1).
+4. Remove the `""` default from `subscription_id` (see step 1).
 
-Update `terraform.tfvars.example` to match.
+5. Check that `ssh_private_key_path` is the private half of `ssh_public_key_path`. The old `ansible/hosts` used `~/.ssh/ansible_id`, while the defaults are `~/.ssh/id_rsa{,.pub}`.
+
+`terraform.tfvars.example` was deleted. If you want an example file again, recreate it from `terraform.tfvars` without real values (`.gitignore` already allows `*.tfvars.example`).
 
 ---
 
-## Step 5: `outputs.tf`
+## Step 5: `outputs.tf` — done
 
-Fixes issue 6. Replace every reference to a removed resource:
+Fixes review issues 1, 2, 3 and 5. `resource_group_name` and `resource_group_location` are already fixed. Replace every other reference to module internals or removed resources:
 
 ```hcl
 output "resource_group_name" {
@@ -308,7 +324,18 @@ output "subnet_id" {
   value       = module.vnet.subnet_ids["snet-vm"]
 }
 
-# nat_gateway_name, nat_gateway_public_ip and ansible_inventory_path: unchanged
+# There is no module.nat_gateway: the NAT gateway is a plain resource in network.tf
+output "nat_gateway_name" {
+  description = "Name of the NAT Gateway"
+  value       = azurerm_nat_gateway.main.name
+}
+
+output "nat_gateway_public_ip" {
+  description = "Public IP address of the NAT Gateway (used for outbound internet)"
+  value       = azurerm_public_ip.nat.ip_address
+}
+
+# ansible_inventory_path: unchanged
 
 output "ssh_master_command" {
   description = "SSH command to connect to the master node (requires VPN or peered VNet)"
@@ -323,9 +350,9 @@ output "ssh_worker_commands" {
 
 ---
 
-## Step 6: `ansible.tf`
+## Step 6: `ansible.tf` — done
 
-Fixes issues 6, 7 and 10.
+Fixes review issues 2, 10 and 12.
 
 ```hcl
 resource "local_file" "ansible_inventory" {
@@ -371,13 +398,13 @@ resource "null_resource" "run_ansible" {
 }
 ```
 
-> ⚠️ **Missing playbook (new finding):** the provisioner calls `k8s/k8s-main.yaml`, but commit `d29870f` deleted it, and `ansible/k8s/setup/` is empty. `run_ansible` fails until the playbooks are restored, for example with `git checkout c015689 -- ansible/k8s`. Point the `command` at wherever `k8s-main.yaml` ends up; the path above assumes `ansible/k8s/setup/`. Until then, add a `run_ansible` variable (`type = bool`, `default = false`) and set `count = var.run_ansible ? 1 : 0` on the resource, or remove the resource.
+The playbooks are back under `ansible/k8s/setup/` (`k8s-main.yaml`, `os-setup.yaml`, `containerd-setup.yaml`, `kube-setup.yaml`, `cluster-setup.yaml`), so the provisioner path must change from `k8s/k8s-main.yaml` to `k8s/setup/k8s-main.yaml` as shown. `depends_on` on `local_file.ansible_inventory` is dropped because the module references already create the dependency.
 
 ---
 
 ## Step 7: Migrate existing state
 
-Fixes issue 8. **Skip this step if step 0 showed empty state.**
+Fixes review issue 11. **Skip this step if step 0 showed empty state.**
 
 Create `moved.tf`:
 
@@ -459,14 +486,17 @@ git add .terraform.lock.hcl *.tf docs/
 
 | # | Issue (from terraform-review.md) | Fixed in |
 |---|---|---|
-| 1 | VM modules written like resources / wrong inputs / reserved username / double base64 | Step 3, Step 4.1 |
-| 2 | Self-referencing `network_interface_ids` | Step 3 |
-| 3 | Bad NSG association reference / duplicate association | Step 2c |
-| 4 | Wrong vnet module input names | Step 2a |
-| 5 | Wrong vnet output names / `.id` on strings | Step 2b |
-| 6 | `outputs.tf` / `ansible.tf` reference removed resources | Steps 5, 6 |
-| 7 | Unattached NICs feed the Ansible inventory | Steps 3, 6 |
-| 8 | No state migration → resource group/VNet destroyed | Step 7 |
-| 9 | Unpinned providers, lock file deleted, `local`/`null` undeclared | Step 1 |
-| 10 | Hard-coded password, SSH open to `*`, Ansible reruns on every apply | Steps 4, 6 |
-| new | `run_ansible` points to a deleted playbook | Step 6 |
+| 1 | `.id` on `subnet_ids` string values | Steps 2b, 3, 5 |
+| 2 | Module internals (`module.x.azurerm_...`) referenced from outside | Steps 5, 6 |
+| 3 | `module.vnet.id` / `module.vnet.name` don't exist | Steps 2b, 5 |
+| 4 | Broken, duplicate NSG association | Step 2c |
+| 5 | Undeclared `module.nat_gateway` in outputs | Step 5 |
+| 6 | No SSH key passed to the VM modules | Step 3 |
+| 7 | Dead locals: no cloud-init, wrong image and OS disk | Step 3 |
+| 8 | Orphan root NICs | Step 3 |
+| 9 | `terraform.tfvars` overrides the VNet range to `10.0.0.0/16` (peering overlap) | Step 2d |
+| 10 | Playbook path `k8s/k8s-main.yaml` moved to `k8s/setup/` | Step 6 |
+| 11 | No state migration | Step 7 |
+| 12 | Ansible reruns on every apply; boot wait runs once | Step 6 |
+| 13 | Module defaults (trusted launch, identity, boot diagnostics) | Step 3 notes |
+| — | `allowed_ssh_source = "*"`, `subscription_id = ""`, key-path mismatch | Step 4 |

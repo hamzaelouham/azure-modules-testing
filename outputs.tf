@@ -1,7 +1,26 @@
-# Resource Group
-output "resource_group_name" {
-  description = "Name of the resource group"
-  value       = module.rg.name
+output "ansible_inventory_path" {
+  description = "Path to the generated Ansible inventory file"
+  value       = local_file.ansible_inventory.filename
+}
+
+output "master_private_ip" {
+  description = "Private IP address of the master node"
+  value       = module.master.private_ip_address
+}
+
+output "master_vm_name" {
+  description = "Name of the master VM"
+  value       = module.master.vm_name
+}
+
+output "nat_gateway_name" {
+  description = "Name of the NAT Gateway"
+  value       = azurerm_nat_gateway.main.name
+}
+
+output "nat_gateway_public_ip" {
+  description = "Public IP address of the NAT Gateway (used for outbound internet)"
+  value       = azurerm_public_ip.nat.ip_address
 }
 
 output "resource_group_location" {
@@ -9,66 +28,45 @@ output "resource_group_location" {
   value       = module.rg.location
 }
 
-# Master Node Outputs
-output "master_vm_name" {
-  description = "Name of the master VM"
-  value       = module.master.azurerm_linux_virtual_machine.vm.name
+output "resource_group_name" {
+  description = "Name of the resource group"
+  value       = module.rg.name
 }
 
-output "master_private_ip" {
-  description = "Private IP address of the master node"
-  value       = module.master.azurerm_network_interface.nic.private_ip_address
-}
-
-# Worker Node Outputs
-output "worker_vm_names" {
-  description = "Names of the worker VMs"
-  value       = module.worker[*].azurerm_linux_virtual_machine.vm.name
-}
-
-output "worker_private_ips" {
-  description = "Private IP addresses of the worker nodes"
-  value       = module.worker[*].azurerm_network_interface.nic.private_ip_address
-}
-
-# Network Outputs
-output "vnet_name" {
-  description = "Name of the virtual network"
-  value       = module.vnet.name
-}
-
-output "subnet_id" {
-  description = "ID of the subnet"
-  value       = module.vnet.subnet_ids["snet-vm"].id
-}
-
-# NAT Gateway Outputs
-output "nat_gateway_name" {
-  description = "Name of the NAT Gateway"
-  value       = module.nat_gateway.name
-}
-
-output "nat_gateway_public_ip" {
-  description = "Public IP address of the NAT Gateway (used for outbound internet)"
-  value       = module.nat_gateway.public_ip_address
-}
-
-# Connection Info
 output "ssh_master_command" {
-  description = "SSH command to connect to the master node (requires VPN or Bastion)"
-  value       = "ssh ${var.admin_username}@${module.master.azurerm_network_interface.nic.private_ip_address}"
+  description = "SSH command for the master node (reachable from the peered VNet)"
+  value       = "ssh -i ${var.ssh_private_key_path} ${var.admin_username}@${module.master.private_ip_address}"
 }
 
 output "ssh_worker_commands" {
-  description = "SSH commands to connect to the worker nodes"
-  value = [
-    for ip in module.worker[*].azurerm_network_interface.nic.private_ip_address :
-    "ssh ${var.admin_username}@${ip}"
-  ]
+  description = "SSH commands for the worker nodes, keyed by VM name"
+  value = {
+    for name, worker in module.worker :
+    name => "ssh -i ${var.ssh_private_key_path} ${var.admin_username}@${worker.private_ip_address}"
+  }
 }
 
-# Ansible Inventory Path
-output "ansible_inventory_path" {
-  description = "Path to the generated Ansible inventory file"
-  value       = local_file.ansible_inventory.filename
+output "subnet_id" {
+  description = "ID of the VM subnet"
+  value       = local.subnet_id
+}
+
+output "vnet_id" {
+  description = "ID of the virtual network"
+  value       = module.vnet.vnet_id
+}
+
+output "vnet_name" {
+  description = "Name of the virtual network"
+  value       = module.vnet.vnet_name
+}
+
+output "worker_private_ips" {
+  description = "Private IP addresses of the worker nodes, keyed by VM name"
+  value       = { for name, worker in module.worker : name => worker.private_ip_address }
+}
+
+output "worker_vm_names" {
+  description = "Names of the worker VMs"
+  value       = [for worker in values(module.worker) : worker.vm_name]
 }

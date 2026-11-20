@@ -1,0 +1,34 @@
+# Copy to terraform.tfvars and adjust. terraform.tfvars is git-ignored.
+
+# subscription_id = "00000000-0000-0000-0000-000000000000" # or export ARM_SUBSCRIPTION_ID
+
+resource_group_name = "k8s-cluster"
+location            = "eastus2"
+
+# Must not overlap the peer VNet (peer_vnet_name / peer_vnet_resource_group).
+vnet_address_space      = ["10.1.0.0/16"]
+subnet_address_prefixes = ["10.1.1.0/24"]
+
+peer_vnet_name           = "devopsVM-vnet"
+peer_vnet_resource_group = "devops-group"
+
+# Omit to allow SSH only from the peer VNet's address range.
+# allowed_ssh_source = "10.0.0.0/16"
+
+admin_username       = "k8sadmin"
+ssh_public_key_path  = "~/.ssh/id_rsa.pub"
+ssh_private_key_path = "~/.ssh/id_rsa"
+
+master_vm_name        = "k8s-master"
+master_vm_size        = "Standard_B2s"
+worker_count          = 2
+worker_vm_name_prefix = "k8s-worker"
+worker_vm_size        = "Standard_B2s"
+
+k8s_version = "1.35"
+
+tags = {
+  Environment = "Development"
+  ManagedBy   = "Terraform"
+  Project     = "Kubernetes"
+}
