@@ -1,55 +1,69 @@
 # Terraform review: all `*.tf` files
 
-Date: 2026-11-05. Scope: `main.tf`, `rg.tf`, `network.tf`, `vm.tf`, `ansible.tf`, `outputs.tf` and `variables.tf` as they are in the working tree, uncommitted changes included.
+Date: 2026-11-05 (second pass). Scope: `main.tf`, `rg.tf`, `network.tf`, `vm.tf`, `ansible.tf`, `outputs.tf`, `variables.tf` and the local `terraform.tfvars`, as they are in the working tree, uncommitted `vm.tf` changes included.
 
-**Verdict: the configuration is not valid.** `terraform validate` stops at "Module not installed" because `terraform init` has not been run for the new git modules. Even after init, it would fail on the issues below. I checked them by hand against the module sources cached in `.terraform/modules/master/modules/{resource-group,vnet,virtual-machine}`.
+**Verdict: the configuration is still not valid.** `terraform init` has now been run (modules are in `.terraform/modules`, `.terraform.lock.hcl` is regenerated), so `terraform validate` runs and reports 15 errors. More errors would follow at `plan`. Module interfaces were checked against the cached sources in `.terraform/modules/{rg,vnet,master}/modules/...`.
+
+## What the last change fixed
+
+- `rg.tf` and the `vnet` module call now use the right input names (`name`/`location`/`rg_tags`, `vnet_name`/`vnet_address_space`/`vnet_tags`).
+- `vm.tf`: the `master` and `worker` module calls now use `vm_name`, `vm_size`, `vm_admin_username`, `vm_tags` and pass `subnet_id`. The self-referencing `network_interface_ids` and the unsupported nested blocks are gone.
+- `main.tf` declares `azapi`, `local` and `null`, and sets `subscription_id`. The lock file pins azurerm 5.12.0, azapi 2.13.0, local 2.9.1, null 3.3.2.
+- `admin_username` defaults to `k8sadmin` (no longer the reserved `azureuser`), and `admin_password` was removed.
+- `outputs.tf` uses `module.rg.name` / `module.rg.location`.
+- The playbooks exist again under `ansible/k8s/setup/`.
 
 ## Blocking errors (validate or plan fails)
 
-### 1. `vm.tf` modules `master` and `worker` (lines 21-61 and 84-125) use the `azurerm_linux_virtual_machine` resource schema, not the module's interface
-- Nested blocks are not allowed inside a `module` block. `admin_ssh_key`, `os_disk` and `source_image_reference` each cause an "Unsupported block type" error.
-- These arguments do not exist on the module: `name`, `size`, `admin_username`, `network_interface_ids`, `disable_password_authentication`, `custom_data` and `tags`. The module's names are `vm_name`, `vm_size`, `vm_admin_username`, `vm_admin_ssh_public_keys`, `vm_os_disk`, `vm_source_image`, `vm_custom_data` and `vm_tags`.
-- Two required inputs are missing: `subnet_id` and `vm_name`.
-- `network_interface_ids = [module.master.azurerm_network_interface.nic.id]` refers to the module from inside itself, which is a cycle. Module internals are also not addressable from outside. The module creates its own NIC and exposes it only as `nic_id`.
-- The module's validation rejects `admin_username = "azureuser"`, which is the default in `variables.tf`, because it is on the module's reserved-name list.
-- `custom_data = base64encode(...)`: the module already base64-encodes `vm_custom_data`, so passing an encoded value would encode it twice. Pass the plain `templatefile(...)` output.
+### 1. `vm.tf:52,90` passes the subnet ID correctly, but `network.tf:76`, `vm.tf:13,72` and `outputs.tf:42` still append `.id`
+`module.vnet.subnet_ids` is `map(string)`. `module.vnet.subnet_ids["snet-vm"].id` is accepted by `validate` (the value is unknown) but fails at `plan` with "Unsupported attribute" / "Can't access attributes on a primitive-typed value (string)". Use `module.vnet.subnet_ids["snet-vm"]`.
 
-### 2. `network.tf` module `vnet` (lines 3-39) uses the wrong argument names
-- `name`, `address_space` and `tags` are not module inputs. They should be `vnet_name`, `vnet_address_space` and `vnet_tags`. Without them the required `vnet_name` and `vnet_address_space` are missing.
+### 2. Module internals are referenced from outside the module
+`module.master.azurerm_network_interface.nic.private_ip_address` and `module.master.azurerm_linux_virtual_machine.vm.name` (and the `module.worker[*]` forms) are not addressable. Affected lines: `ansible.tf:8-9`, `outputs.tf:15,20,26,31,59,65`. Use the module outputs `vm_name`, `private_ip_address`, `vm_id`, `nic_id`.
 
-### 3. Module outputs are referenced with the wrong names and shapes
-- `module.vnet.subnet_ids` is a `map(string)` of IDs, so `module.vnet.subnet_ids["snet-vm"].id` fails with "Unsupported attribute". This happens in `network.tf:75`, `vm.tf:13` and `vm.tf:76`. Use `module.vnet.subnet_ids["snet-vm"]`.
-- `module.vnet.id` (`network.tf:89`) and `module.vnet.name` (`network.tf:95`) do not exist. The outputs are `vnet_id` and `vnet_name`.
+### 3. `network.tf:90,96` use vnet outputs that do not exist
+`module.vnet.id` and `module.vnet.name` must be `module.vnet.vnet_id` and `module.vnet.vnet_name`. `outputs.tf:37` has the same problem.
 
-### 4. `network.tf:99-102` has a broken NSG association that should be removed
-- `azurerm_subnet.module.vnet...` is not a valid reference.
-- `azurerm_network_security_group.main` was deleted along with `security.tf`.
-- The vnet module already associates its NSG with every subnet (`associate_nsg` defaults to `true`). A second association on the same subnet would conflict even if the references were fixed. Delete this block.
+### 4. `network.tf:100-103` is a broken, duplicate NSG association
+`azurerm_subnet.module.vnet...` is not a valid reference and `azurerm_network_security_group.main` no longer exists. The vnet module already associates `nsg-vm` with every subnet (`associate_nsg` defaults to `true`), and Azure allows one NSG per subnet. Delete the block.
 
-### 5. `outputs.tf` and `ansible.tf` still reference resources that were removed
-- `outputs.tf:4,9` use `azurerm_resource_group.main`, which is now commented out. Use `module.rg.name` and `module.rg.location`.
-- `outputs.tf:15,26` and `ansible.tf:17,18,25,26` use `azurerm_linux_virtual_machine.master` and `.worker`. Use `module.master.vm_name`, `module.worker[*].vm_name` and the module references in `depends_on`.
-- `outputs.tf:37` uses `azurerm_virtual_network.main`. Use `module.vnet.vnet_name`.
-- `outputs.tf:43` uses `azurerm_subnet.main`. Use `module.vnet.subnet_ids["snet-vm"]`.
+### 5. `outputs.tf:48,53` reference an undeclared `module.nat_gateway`
+The NAT gateway is a plain resource in `network.tf`. Use `azurerm_nat_gateway.main.name` and `azurerm_public_ip.nat.ip_address`.
 
-## Logic and operational issues
+## Functional bugs (plan succeeds, deployment is wrong)
 
-### 6. The NICs at the root of `vm.tf` are orphaned, so the Ansible inventory and outputs point at the wrong IPs
-`azurerm_network_interface.master` and `.worker` (`vm.tf:6-18`, `vm.tf:68-81`) are no longer attached to any VM, because the module creates its own NIC from `subnet_id`. `ansible.tf:8-9` and `outputs.tf:20,31,59,65` read IPs from these unattached NICs. Every Ansible run and SSH command would therefore target addresses that no VM answers on. Delete the root NICs and use `module.master.private_ip_address` and `module.worker[*].private_ip_address`.
+### 6. The VM modules get no SSH key, so the VMs cannot be created or reached
+`vm.tf` builds `local.admin_ssh_key` but never passes `vm_admin_ssh_public_keys`. The module forces `disable_password_authentication = true` on Linux and has no precondition for an empty key list, so Azure rejects the VM at apply ("Linux VMs with password authentication disabled require an SSH key"). Pass `vm_admin_ssh_public_keys = [local.admin_ssh_key]`.
 
-### 7. There are no `moved` blocks, so `apply` would destroy and recreate all infrastructure
-Every resource changed address: `azurerm_resource_group.main` moves to `module.rg.azurerm_resource_group.rg`, the VNet, subnet and NSG move into `module.vnet`, and the VMs move into the modules. With an existing state, `plan` destroys the resource group, the VNet and both VMs, along with the running Kubernetes cluster, and recreates them. Add `moved {}` blocks, or use `terraform state mv`. The VM module may manage VMs under a different internal address (for example with `count` or `for_each`), so check that before writing the `moved` blocks.
+### 7. All the locals in `vm.tf:21-41` are dead, so the VMs silently get module defaults
+`custom_data`, `vm_os_disk` and `source_image_reference` are not wired to `vm_custom_data`, `vm_os_disk` and `vm_source_image`. Result: Ubuntu 24.04 (`ubuntu-24_04-lts/server`) instead of 22.04, a `StandardSSD_LRS` OS disk at the image default size instead of `Standard_LRS`/`os_disk_size_gb`, and no cloud-init (the passwordless-sudo user in `templates/cloud-init.yaml.tftpl` is never created). `os_disk_size_gb` is now an unused variable. When wiring `custom_data`, drop the `base64encode()`: the module encodes `vm_custom_data` itself, so it would be double-encoded.
 
-### 8. The major provider upgrade and the deleted lock file leave providers unpinned
-`azurerm` jumps from `~> 3.0` to `>= 5.12, < 6.0` across two major versions with breaking schema changes, and `.terraform.lock.hcl` was deleted. Providers will float on the next `init`, which makes builds non-reproducible. Run `terraform init -upgrade`, commit the regenerated lock file, and review the state upgrade.
+### 8. Orphan NICs in `vm.tf:6-18,64-77`
+The module creates its own NIC (`<vm_name>-nic`) from `subnet_id`. `azurerm_network_interface.master` and `.worker` are attached to nothing: they take three IPs from `snet-vm` and are billed for nothing. Delete them.
 
-### 9. Providers used in `ansible.tf` are not declared
-`local_file` (`hashicorp/local`) and `null_resource` (`hashicorp/null`) are not listed in `required_providers` in `main.tf`. Without the lock file they resolve to whatever version is latest. Pin them, or switch to the built-in `terraform_data` in place of `null_resource`.
+### 9. `local terraform.tfvars` overrides the VNet range back to `10.0.0.0/16`
+`variables.tf` defaults to `10.1.0.0/16` / `10.1.1.0/24` (changed in `ede9c8d` for the peering, and the running cluster in `ansible/hosts` is on `10.1.1.x`). `terraform.tfvars` sets `10.0.0.0/16` / `10.0.1.0/24`, which is also Azure's default for portal-created VNets such as `devopsVM-vnet`. Overlapping address spaces make both peerings fail, and the range change forces the VNet and subnet to be replaced. The same file also moves `location` to `westeurope` and renames the VMs (`vm-master`, `vm-worker-N`) and the resource group, each of which forces replacement of an existing deployment. Remove those overrides or confirm a fresh deployment is intended.
 
-## Security and cleanup (existing issues, not introduced by this change)
+### 10. `ansible.tf:41` runs a playbook path that no longer exists
+The playbooks moved to `ansible/k8s/setup/`, so `k8s/k8s-main.yaml` must be `k8s/setup/k8s-main.yaml`.
 
-### 10. Insecure defaults in `variables.tf`
-- `admin_password` (line 66) has a hard-coded default of `Password123!@#`. It is also unused, because password authentication is disabled. Remove it.
-- `allowed_ssh_source` (line 93) defaults to `"*"`, which opens SSH to the internet if a public IP is ever attached.
-- `ansible.tf:43`: `triggers = { always_run = timestamp() }` reruns the whole Kubernetes playbook on every `apply`.
-- `terraform.tfvars.example` uses `vm_name` and `vm_size`, which are not declared variables (Terraform warns about them), and contains the example password `YourSecureP@ssw0rd!`.
+## Operational issues
+
+### 11. No state migration (`moved` blocks)
+Every resource changed address (resource group, VNet, subnet and NSG into modules, VMs into the VM module). With existing state, `plan` destroys and recreates the resource group and everything in it. See [terraform-fixes.md](terraform-fixes.md) step 7.
+
+### 12. Ansible reruns on every apply; the boot wait runs only once
+`run_ansible` uses `triggers = { always_run = timestamp() }`, so the whole Kubernetes playbook runs on every `apply`, including applies that only change tags. `wait_for_vms` has no triggers, so it never runs again when VMs are replaced, and Ansible then races the boot. Trigger both on the VM IDs (and `run_ansible` also on the inventory hash and `k8s_version`).
+
+### 13. Module defaults differ from the old VMs
+Trusted launch, a system-assigned identity and boot diagnostics are on by default. Existing VMs are replaced (NIC and OS disk names change), so the cluster must be rebuilt.
+
+## Security and cleanup
+
+- `allowed_ssh_source` defaults to `"*"` in both `variables.tf:98` and `terraform.tfvars:23`. The VMs have no public IP today, but any public IP added later is open to the internet on 22. Set it to the peer VNet range.
+- `ssh_private_key_path` defaults to `~/.ssh/id_rsa`, while `ansible/hosts` uses `~/.ssh/ansible_id`. The generated inventory uses the Terraform variable, so make sure the pair matches the public key that ends up on the VMs.
+- Host key checking is disabled in both `ansible.tf:44` and `templates/inventory.tftpl`.
+- `subscription_id` defaults to `""`. azurerm 4+ requires a subscription; with `""` it falls back to `ARM_SUBSCRIPTION_ID` and fails if that is unset. Remove the default or document the env var.
+- `terraform.tfvars` still carries leftover comments from the deleted `terraform.tfvars.example` ("Copy this to terraform.tfvars", the password-rule comment).
+- `azurerm_public_ip.nat` is pinned to zone `1` while `azurerm_nat_gateway.main` has no zone. Put both in the same zone, or remove `zones` from the public IP.
+- `network.tf:18` has a stale commented `# vnet_tags` line (it is set on line 39), and `vm.tf` mixes `file(pathexpand(...))` and `file(...)` for the same key: use `local.admin_ssh_key` everywhere.

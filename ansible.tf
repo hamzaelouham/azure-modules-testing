@@ -1,45 +1,44 @@
 # =============================================================================
-# Ansible Integration
+# Ansible integration
 # =============================================================================
 
-# Generate Ansible inventory from Terraform outputs
 resource "local_file" "ansible_inventory" {
-  content = templatefile("${path.module}/templates/inventory.tftpl", {
-    master_ip            = module.master.azurerm_network_interface.nic.private_ip_address
-    worker_ips           = module.worker[*].azurerm_network_interface.nic.private_ip_address
-    ssh_user             = var.admin_username
-    ssh_private_key_path = var.ssh_private_key_path
-  })
   filename        = "${path.module}/ansible/inventory"
   file_permission = "0600"
 
-  depends_on = [module.master, module.worker]
+  content = templatefile("${path.module}/templates/inventory.tftpl", {
+    master_ip            = module.master.private_ip_address
+    worker_ips           = [for worker in values(module.worker) : worker.private_ip_address]
+    ssh_user             = var.admin_username
+    ssh_private_key_path = pathexpand(var.ssh_private_key_path)
+  })
 }
 
-# Wait for VMs to be ready before running Ansible
-resource "null_resource" "wait_for_vms" {
-  depends_on = [module.master, module.worker]
+# Wait for the VMs to boot. Re-runs whenever a VM is created or replaced.
+resource "terraform_data" "wait_for_vms" {
+  triggers_replace = concat(
+    [module.master.vm_id],
+    [for worker in values(module.worker) : worker.vm_id],
+  )
 
-  # Wait for VMs to be fully booted
   provisioner "local-exec" {
     command = "echo 'Waiting 60 seconds for VMs to boot...' && sleep 60"
   }
 }
 
-# Run Ansible playbook to set up Kubernetes cluster
-resource "null_resource" "run_ansible" {
-  depends_on = [
-    local_file.ansible_inventory,
-    null_resource.wait_for_vms
-  ]
-
-  triggers = {
-    always_run = timestamp()
+# Set up the Kubernetes cluster. Re-runs only when the VMs, the inventory or
+# the Kubernetes version change.
+resource "terraform_data" "run_ansible" {
+  triggers_replace = {
+    vm_ids      = terraform_data.wait_for_vms.id
+    inventory   = local_file.ansible_inventory.content_sha256
+    k8s_version = var.k8s_version
   }
 
   provisioner "local-exec" {
-    command     = "ansible-playbook -i inventory k8s/k8s-main.yaml -e k8s_version=${var.k8s_version}"
+    command     = "ansible-playbook -i inventory k8s/setup/k8s-main.yaml -e k8s_version=${var.k8s_version}"
     working_dir = "${path.module}/ansible"
+
     environment = {
       ANSIBLE_HOST_KEY_CHECKING = "False"
     }
