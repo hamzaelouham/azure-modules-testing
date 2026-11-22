@@ -105,6 +105,12 @@ variable "k8s_version" {
   default     = "1.30"
 }
 
+variable "kv_sku_name" {
+  description = "keyvault sku"
+  type        = string
+  default     = "standard"
+}
+
 # Tags
 variable "tags" {
   description = "Tags to apply to all resources"
