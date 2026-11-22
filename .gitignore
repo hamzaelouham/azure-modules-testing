@@ -39,7 +39,8 @@ ansible/inventory.yaml
 ansible/*.log
 ansible/**/*.log
 
-# Ansible temporary files
+# Ansible temporary files and the ansible-lint / ansible-galaxy cache
+.ansible/
 ansible/tmp/
 ansible/**/.ansible_tmp/
 
@@ -65,7 +66,6 @@ kubeconfig.yaml
 kubeconfig.yml
 *.kubeconfig
 admin.conf
-/tmp/kubernetes_join_command
 
 # =========================
 # Cloud Provider Credentials
