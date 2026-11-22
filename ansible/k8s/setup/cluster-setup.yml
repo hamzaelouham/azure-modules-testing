@@ -1,79 +1,70 @@
 ---
-- hosts: master
-  become: yes
-  
+- name: Initialize the control plane
+  hosts: master
+  become: true
   tasks:
-  - name: Check if Kubernetes is already initialized
-    stat:
-      path: /etc/kubernetes/admin.conf
-    register: kubeadm_init_check
+    - name: Initialize the control plane with kubeadm
+      # ansible_host is the master's public IP when it has one, so kubectl can
+      # reach the API server from outside the VNet.
+      ansible.builtin.command:
+        argv:
+          - kubeadm
+          - init
+          - --pod-network-cidr={{ k8s_pod_network_cidr }}
+          - --apiserver-cert-extra-sans={{ ansible_host | default(inventory_hostname) }}
+        creates: /etc/kubernetes/admin.conf
 
-  - name: Initialize Kubernetes control plane with kubeadm init
-    command: >
-      kubeadm init
-      --pod-network-cidr=10.244.0.0/16
-    when: not kubeadm_init_check.stat.exists
+    - name: Create the .kube directory for the admin user
+      ansible.builtin.file:
+        path: /home/{{ ansible_user }}/.kube
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0700"
 
-  - name: Create .kube directory for current user
-    file:
-      path: "/home/{{ ansible_user }}/.kube"
-      state: directory
-      owner: "{{ ansible_user }}"
-      group: "{{ ansible_user }}"
-      mode: '0755'
+    - name: Copy the admin kubeconfig for the admin user
+      ansible.builtin.copy:
+        src: /etc/kubernetes/admin.conf
+        dest: /home/{{ ansible_user }}/.kube/config
+        remote_src: true
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0600"
 
-  - name: Copy admin.conf to user's kube config
-    copy:
-      remote_src: true
-      src: /etc/kubernetes/admin.conf
-      dest: "/home/{{ ansible_user }}/.kube/config"
-      owner: "{{ ansible_user }}"
-      group: "{{ ansible_user }}"
-      mode: '0600'
+    - name: Install the Flannel pod network
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - apply
+          - -f
+          - https://github.com/flannel-io/flannel/releases/download/{{ k8s_flannel_version }}/kube-flannel.yml
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      register: cluster_flannel_apply
+      changed_when: "'created' in cluster_flannel_apply.stdout or 'configured' in cluster_flannel_apply.stdout"
 
-  - name: Install Flannel CNI network plugin
-    command: kubectl apply -f https://raw.githubusercontent.com/flannel-io/flannel/master/Documentation/kube-flannel.yml
-    when: not kubeadm_init_check.stat.exists
-  
-  - name: Get the kubeadm join command from the Kubernetes control plane
-    command: kubeadm token create --print-join-command
-    changed_when: false
-    register: kubernetes_join_command
+    - name: Create a join command for the workers
+      ansible.builtin.command: kubeadm token create --print-join-command --ttl 30m
+      register: cluster_join_command
+      changed_when: false
+      no_log: true
 
-  - name: Display join command
-    debug:
-      msg: "{{ kubernetes_join_command.stdout_lines[0] }}"
-
-  - name: Copy join command to local file
-    local_action:
-      module: copy
-      content: "{{ kubernetes_join_command.stdout_lines[0] }}"
-      dest: /tmp/kubernetes_join_command
-      mode: '0755'
-    become: false
-
-- hosts: worker
-  become: yes
-
+- name: Join the workers to the cluster
+  hosts: worker
+  become: true
   tasks:
-  - name: Check if node is already joined to cluster
-    stat:
-      path: /etc/kubernetes/kubelet.conf
-    register: kubelet_conf_check
+    - name: Join the cluster with kubeadm
+      ansible.builtin.command: "{{ hostvars[groups['master'][0]]['cluster_join_command']['stdout'] }}"
+      args:
+        creates: /etc/kubernetes/kubelet.conf
+      no_log: true
 
-  - name: Copy join command from Ansible host to the worker nodes
-    copy:
-      src: /tmp/kubernetes_join_command
-      dest: /tmp/kubernetes_join_command
-      mode: '0755'
-    when: not kubelet_conf_check.stat.exists
-
-  - name: Join the Worker nodes to the cluster
-    command: sh /tmp/kubernetes_join_command
-    when: not kubelet_conf_check.stat.exists
-    register: joined_or_not
-
-  - name: Cleanup join command file on worker
-    file:
-      path: /tmp/kubernetes_join_command
-      state: absent
+- name: Check the cluster
+  hosts: master
+  become: true
+  tasks:
+    - name: Wait for every node to be Ready
+      ansible.builtin.command: kubectl wait --for=condition=Ready nodes --all --timeout=300s
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      changed_when: false

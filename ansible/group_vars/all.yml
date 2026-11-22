@@ -1,0 +1,9 @@
+---
+# Kubernetes minor version; Terraform overrides it with -e k8s_version=<var.k8s_version>.
+k8s_version: "1.35"
+
+# Pod network; must match the Flannel manifest's default (10.244.0.0/16).
+k8s_pod_network_cidr: 10.244.0.0/16
+
+# Pinned Flannel release (https://github.com/flannel-io/flannel/releases).
+k8s_flannel_version: v0.28.11

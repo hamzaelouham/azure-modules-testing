@@ -43,6 +43,9 @@ stages:
               terraform init -backend=false -input=false
               terraform validate
             displayName: terraform validate
+          - script: pipx run ansible-lint k8s/setup
+            workingDirectory: ansible
+            displayName: ansible-lint
 
   # ---------------------------------------------------------------------------
   - stage: Plan

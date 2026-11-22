@@ -1,130 +1,73 @@
 ---
-- hosts: all
-  become: yes
-  vars:
-    # RedHat Docker repo settings
-    docker_yum_gpg_key: https://download.docker.com/linux/centos/gpg
-    docker_yum_repo_url: https://download.docker.com/linux/centos/docker-ce.repo
-    docker_yum_repo_enable_nightly: '0'
+- name: Install and configure containerd
+  hosts: all
+  become: true
   tasks:
-  # ============= Debian/Ubuntu =============
-  - name: Install required dependencies (Debian)
-    apt:
-      name:
-        - ca-certificates
-        - curl
-      state: present
-      update_cache: yes
-    when: ansible_os_family == 'Debian'
+    - name: Create the apt keyrings directory
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
 
-  - name: Create keyrings directory
-    file:
-      path: /etc/apt/keyrings
-      state: directory
-      mode: '0755'
-    when: ansible_os_family == 'Debian'
+    - name: Download the Docker apt key
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        dest: /etc/apt/keyrings/docker.asc
+        owner: root
+        group: root
+        mode: "0644"
 
-  - name: Add Docker GPG key (Debian)
-    get_url:
-      url: https://download.docker.com/linux/{{ ansible_distribution | lower }}/gpg
-      dest: /etc/apt/keyrings/docker.asc
-      mode: '0644'
-    when: ansible_os_family == 'Debian'
+    - name: Add the Docker apt repository (provides containerd.io)
+      ansible.builtin.copy:
+        dest: /etc/apt/sources.list.d/docker.sources
+        content: |
+          Types: deb
+          URIs: https://download.docker.com/linux/ubuntu
+          Suites: {{ ansible_facts['distribution_release'] }}
+          Components: stable
+          Signed-By: /etc/apt/keyrings/docker.asc
+        owner: root
+        group: root
+        mode: "0644"
+      register: containerd_docker_repo
 
-  - name: Add Docker repository (deb822 format)
-    copy:
-      dest: /etc/apt/sources.list.d/docker.sources
-      content: |
-        Types: deb
-        URIs: https://download.docker.com/linux/{{ ansible_distribution | lower }}
-        Suites: {{ ansible_distribution_release }}
-        Components: stable
-        Signed-By: /etc/apt/keyrings/docker.asc
-      mode: '0644'
-    when: ansible_os_family == 'Debian'
+    - name: Install containerd
+      ansible.builtin.apt:
+        name: containerd.io
+        state: present
+        update_cache: "{{ containerd_docker_repo is changed }}"
+        cache_valid_time: 3600
 
-  - name: Update apt cache after adding Docker repo
-    apt:
-      update_cache: yes
-    when: ansible_os_family == 'Debian'
+    - name: Read the default containerd configuration
+      ansible.builtin.command: containerd config default
+      changed_when: false
+      register: containerd_default_config
 
-  # ============= RedHat/CentOS =============
-  - name: Add Docker GPG key (RedHat)
-    rpm_key:
-      key: "{{ docker_yum_gpg_key }}"
-      state: present
-    when: ansible_os_family == 'RedHat'
+    - name: Check that the default configuration has a SystemdCgroup setting to enable
+      ansible.builtin.assert:
+        that: "'SystemdCgroup = ' in containerd_default_config.stdout"
+        fail_msg: containerd's default configuration has no SystemdCgroup setting; update this playbook for the new format.
+        quiet: true
 
-  - name: Add Docker repository (RedHat)
-    get_url:
-      url: "{{ docker_yum_repo_url }}"
-      dest: /etc/yum.repos.d/docker-ce.repo
-      owner: root
-      group: root
-      mode: '0644'
-    when: ansible_os_family == 'RedHat'
+    - name: Write the containerd configuration with the systemd cgroup driver
+      ansible.builtin.copy:
+        dest: /etc/containerd/config.toml
+        content: "{{ containerd_default_config.stdout | regex_replace('SystemdCgroup = false', 'SystemdCgroup = true') }}\n"
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Restart containerd
 
-  - name: Configure Docker Nightly repo (RedHat)
-    ini_file:
-      dest: /etc/yum.repos.d/docker-ce.repo
-      section: docker-ce-nightly
-      option: enabled
-      value: "{{ docker_yum_repo_enable_nightly }}"
-      mode: '0644'
-    when: ansible_os_family == 'RedHat'
+    - name: Enable and start containerd
+      ansible.builtin.systemd_service:
+        name: containerd
+        state: started
+        enabled: true
 
-  - name: Ensure container-selinux is installed (RedHat)
-    package:
-      name: container-selinux
-      state: present
-    when: ansible_os_family == 'RedHat'
-
-  # ============= Common =============
-  - name: Install containerd
-    package:
-      name: containerd.io
-      state: present
-
-  - name: Create containerd config directory
-    file:
-      path: /etc/containerd
-      state: directory
-      mode: '0755'
-
-  - name: Get defaults from containerd
-    command: containerd config default
-    changed_when: false
-    register: containerd_config_default
-
-  - name: Prepare containerd config.toml from default config
-    copy:
-      dest: /tmp/containerd_config.toml
-      content: "{{ containerd_config_default.stdout }}"
-      mode: '0644'
-
-  - name: Set Cgroup driver to systemd
-    lineinfile:
-      path: /tmp/containerd_config.toml
-      regexp: '^\s*SystemdCgroup\s*='
-      insertafter: '.*\[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options\]$'
-      line: '            SystemdCgroup = true'
-      state: present
-
-  - name: Copy config.toml to /etc/containerd
-    copy:
-      remote_src: true
-      src: /tmp/containerd_config.toml
-      dest: /etc/containerd/config.toml
-      mode: '0644'
-
-  - name: Cleanup temporary file
-    file:
-      path: /tmp/containerd_config.toml
-      state: absent
-
-  - name: Enable and restart containerd service
-    systemd:
-      name: containerd
-      state: restarted
-      enabled: yes
-      daemon_reload: yes
+  handlers:
+    - name: Restart containerd
+      ansible.builtin.systemd_service:
+        name: containerd
+        state: restarted

@@ -1,5 +1,24 @@
 ---
-- import_playbook: os-setup.yaml
-- import_playbook: containerd-setup.yaml
-- import_playbook: kube-setup.yaml
-- import_playbook: cluster-setup.yaml
+- name: Wait for the VMs to finish booting
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Wait until the hosts accept SSH connections
+      ansible.builtin.wait_for_connection:
+        timeout: 600
+
+    - name: Wait for cloud-init to finish (it holds the apt lock while running)
+      ansible.builtin.command: cloud-init status --wait
+      changed_when: false
+
+- name: Prepare the operating system
+  ansible.builtin.import_playbook: os-setup.yml
+
+- name: Install containerd
+  ansible.builtin.import_playbook: containerd-setup.yml
+
+- name: Install the Kubernetes packages
+  ansible.builtin.import_playbook: kube-setup.yml
+
+- name: Create the cluster
+  ansible.builtin.import_playbook: cluster-setup.yml

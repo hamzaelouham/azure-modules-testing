@@ -1,65 +1,45 @@
 ---
-- hosts: all
-  become: yes
+- name: Install kubelet, kubeadm and kubectl
+  hosts: all
+  become: true
   vars:
-    k8s_version: "1.35"  # Override with -e k8s_version=1.30
-  tasks:
-  - name: Install required dependencies
-    apt:
-      name:
-        - apt-transport-https
-        - ca-certificates
-        - curl
-        - gnupg
-      state: present
-      update_cache: yes
-
-  - name: Create keyrings directory
-    file:
-      path: /etc/apt/keyrings
-      state: directory
-      mode: '0755'
-
-  - name: Download and install Kubernetes GPG key
-    shell: |
-      curl -fsSL https://pkgs.k8s.io/core:/stable:/v{{ k8s_version }}/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-    args:
-      creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-
-  - name: Set permissions on GPG keyring
-    file:
-      path: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-      mode: '0644'
-
-  - name: Add Kubernetes repository
-    copy:
-      dest: /etc/apt/sources.list.d/kubernetes.list
-      content: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v{{ k8s_version }}/deb/ /"
-      mode: '0644'
-
-  - name: Update apt cache
-    apt:
-      update_cache: yes
-
-  - name: Install Kubernetes packages
-    apt:
-      name:
-        - kubelet
-        - kubeadm
-        - kubectl
-      state: present
-
-  - name: Hold Kubernetes packages at current version
-    dpkg_selections:
-      name: "{{ item }}"
-      selection: hold
-    loop:
+    kube_packages:
       - kubelet
       - kubeadm
       - kubectl
+  tasks:
+    - name: Download the Kubernetes apt key
+      ansible.builtin.get_url:
+        url: https://pkgs.k8s.io/core:/stable:/v{{ k8s_version }}/deb/Release.key
+        dest: /etc/apt/keyrings/kubernetes-apt-keyring.asc
+        owner: root
+        group: root
+        mode: "0644"
 
-  - name: Ensure kubelet is started and enabled at boot
-    service:
-      name: kubelet
-      state: started
-      enabled: true
+    - name: Add the Kubernetes apt repository
+      ansible.builtin.copy:
+        dest: /etc/apt/sources.list.d/kubernetes.list
+        content: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.asc] https://pkgs.k8s.io/core:/stable:/v{{ k8s_version }}/deb/ /\n"
+        owner: root
+        group: root
+        mode: "0644"
+      register: kube_repo
+
+    - name: Install the Kubernetes packages
+      ansible.builtin.apt:
+        name: "{{ kube_packages }}"
+        state: present
+        update_cache: "{{ kube_repo is changed }}"
+        cache_valid_time: 3600
+
+    - name: Hold the Kubernetes packages at their installed version
+      ansible.builtin.dpkg_selections:
+        name: "{{ item }}"
+        selection: hold
+      loop: "{{ kube_packages }}"
+
+    - name: Enable and start kubelet
+      ansible.builtin.systemd_service:
+        name: kubelet
+        state: started
+        enabled: true
