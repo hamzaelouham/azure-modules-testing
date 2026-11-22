@@ -10,6 +10,9 @@ module "master" {
   subnet_id           = local.subnet_id
   vm_size             = var.master_vm_size
 
+  # Lets Ansible (and you) reach the cluster without the peered VNet.
+  vm_public_ip_enabled = var.master_public_ip_enabled
+
   vm_admin_username        = var.admin_username
   vm_admin_ssh_public_keys = [local.admin_ssh_public_key]
   vm_custom_data           = local.cloud_init

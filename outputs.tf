@@ -3,9 +3,24 @@ output "ansible_inventory_path" {
   value       = local_file.ansible_inventory.filename
 }
 
+output "key_vault_name" {
+  description = "Name of the Key Vault"
+  value       = module.keyvault.kv_name
+}
+
+output "key_vault_uri" {
+  description = "URI of the Key Vault"
+  value       = module.keyvault.kv_uri
+}
+
 output "master_private_ip" {
   description = "Private IP address of the master node"
   value       = module.master.private_ip_address
+}
+
+output "master_public_ip" {
+  description = "Public IP address of the master node, or null when master_public_ip_enabled is false"
+  value       = module.master.public_ip_address
 }
 
 output "master_vm_name" {
@@ -34,15 +49,15 @@ output "resource_group_name" {
 }
 
 output "ssh_master_command" {
-  description = "SSH command for the master node (reachable from the peered VNet)"
-  value       = "ssh -i ${var.ssh_private_key_path} ${var.admin_username}@${module.master.private_ip_address}"
+  description = "SSH command for the master node (public IP when enabled, otherwise the private IP from the peered VNet)"
+  value       = "ssh -i ${var.ssh_private_key_path} ${var.admin_username}@${local.master_ssh_host}"
 }
 
 output "ssh_worker_commands" {
-  description = "SSH commands for the worker nodes, keyed by VM name"
+  description = "SSH commands for the worker nodes, keyed by VM name (jumping through the master when it has a public IP)"
   value = {
     for name, worker in module.worker :
-    name => "ssh -i ${var.ssh_private_key_path} ${var.admin_username}@${worker.private_ip_address}"
+    name => var.master_public_ip_enabled ? "ssh -i ${var.ssh_private_key_path} -J ${var.admin_username}@${local.master_ssh_host} ${var.admin_username}@${worker.private_ip_address}" : "ssh -i ${var.ssh_private_key_path} ${var.admin_username}@${worker.private_ip_address}"
   }
 }
 

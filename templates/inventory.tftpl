@@ -1,14 +1,19 @@
+%{ if master_public_ip != "" ~}
+# Ansible reaches the master through its public IP and the workers by jumping through it.
+%{ endif ~}
 [master]
-${master_ip} ansible_user=${ssh_user} ansible_ssh_private_key_file=${ssh_private_key_path} ansible_become=true
+${master_ip}%{ if master_public_ip != "" } ansible_host=${master_public_ip}%{ endif } ansible_user=${ssh_user} ansible_ssh_private_key_file=${ssh_private_key_path} ansible_become=true
 
 [worker]
 %{ for ip in worker_ips ~}
 ${ip} ansible_user=${ssh_user} ansible_ssh_private_key_file=${ssh_private_key_path} ansible_become=true
 %{ endfor ~}
+%{ if master_public_ip != "" ~}
+
+[worker:vars]
+ansible_ssh_common_args='-o StrictHostKeyChecking=no -o ProxyCommand="ssh -W %h:%p -o StrictHostKeyChecking=no -i ${ssh_private_key_path} ${ssh_user}@${master_public_ip}"'
+%{ endif ~}
 
 [all:children]
 master
 worker
-
-[all:vars]
-ansible_ssh_common_args='-o StrictHostKeyChecking=no'

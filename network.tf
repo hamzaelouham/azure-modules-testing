@@ -42,7 +42,7 @@ module "vnet" {
 }
 
 # =============================================================================
-# NAT Gateway (outbound internet for the VMs, which have no public IP)
+# NAT Gateway (outbound internet for the VMs)
 # =============================================================================
 
 resource "azurerm_public_ip" "nat" {
@@ -78,34 +78,40 @@ resource "azurerm_subnet_nat_gateway_association" "main" {
 }
 
 # =============================================================================
-# Peering with the existing VNet
+# Optional peering with an existing VNet
 # =============================================================================
 
 data "azurerm_virtual_network" "peer" {
+  count = var.peering_enabled ? 1 : 0
+
   name                = var.peer_vnet_name
   resource_group_name = var.peer_vnet_resource_group
 }
 
 resource "azurerm_virtual_network_peering" "peer_to_new" {
+  count = var.peering_enabled ? 1 : 0
+
   name                      = "peer-to-${module.vnet.vnet_name}"
   resource_group_name       = var.peer_vnet_resource_group
-  virtual_network_name      = data.azurerm_virtual_network.peer.name
+  virtual_network_name      = data.azurerm_virtual_network.peer[0].name
   remote_virtual_network_id = module.vnet.vnet_id
 
   lifecycle {
     precondition {
       condition = alltrue([
         for prefix in var.vnet_address_space :
-        !contains(data.azurerm_virtual_network.peer.address_space, prefix)
+        !contains(data.azurerm_virtual_network.peer[0].address_space, prefix)
       ])
-      error_message = "vnet_address_space overlaps the peer VNet (${join(", ", data.azurerm_virtual_network.peer.address_space)}). Peered VNets need distinct address ranges."
+      error_message = "vnet_address_space overlaps the peer VNet (${join(", ", data.azurerm_virtual_network.peer[0].address_space)}). Peered VNets need distinct address ranges."
     }
   }
 }
 
 resource "azurerm_virtual_network_peering" "new_to_peer" {
-  name                      = "peer-to-${data.azurerm_virtual_network.peer.name}"
+  count = var.peering_enabled ? 1 : 0
+
+  name                      = "peer-to-${data.azurerm_virtual_network.peer[0].name}"
   resource_group_name       = module.rg.name
   virtual_network_name      = module.vnet.vnet_name
-  remote_virtual_network_id = data.azurerm_virtual_network.peer.id
+  remote_virtual_network_id = data.azurerm_virtual_network.peer[0].id
 }

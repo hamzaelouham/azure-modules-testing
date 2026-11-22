@@ -5,27 +5,35 @@
 resource_group_name = "k8s-cluster"
 location            = "eastus2"
 
-# Must not overlap the peer VNet (peer_vnet_name / peer_vnet_resource_group).
+# Must not overlap the peer VNet when peering_enabled = true.
 vnet_address_space      = ["10.1.0.0/16"]
 subnet_address_prefixes = ["10.1.1.0/24"]
 
-peer_vnet_name           = "devopsVM-vnet"
-peer_vnet_resource_group = "devops-group"
+# Optional peering with an existing VNet (it must already exist).
+peering_enabled = false
+# peer_vnet_name           = "devopsVM-vnet"
+# peer_vnet_resource_group = "devops-group"
 
-# Omit to allow SSH only from the peer VNet's address range.
-# allowed_ssh_source = "10.0.0.0/16"
+# "*" (default) opens SSH to any source; use a CIDR to restrict it, or null to
+# use the peer VNet's range (needs peering_enabled = true).
+allowed_ssh_source       = "*"
+master_public_ip_enabled = true
 
 admin_username       = "k8sadmin"
 ssh_public_key_path  = "~/.ssh/id_rsa.pub"
 ssh_private_key_path = "~/.ssh/id_rsa"
 
 master_vm_name        = "k8s-master"
-master_vm_size        = "Standard_B2s"
-worker_count          = 2
+master_vm_size        = "Standard_D2ls_v7"
+worker_count          = 1 # Free Trial: 4 vCPUs per region
 worker_vm_name_prefix = "k8s-worker"
-worker_vm_size        = "Standard_B2s"
+worker_vm_size        = "Standard_D2ls_v7"
 
 k8s_version = "1.35"
+
+kv_sku_name                   = "standard"
+kv_purge_protection_enabled   = false
+kv_soft_delete_retention_days = 7
 
 tags = {
   Environment = "Development"

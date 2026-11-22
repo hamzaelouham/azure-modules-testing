@@ -5,13 +5,18 @@ variable "admin_username" {
 }
 
 variable "allowed_ssh_source" {
-  description = "Source CIDR allowed to reach SSH on the VMs. Null uses the peer VNet's first address range."
+  description = "Source allowed to reach SSH on the VMs: \"*\" (any), a CIDR block, or null for the peer VNet's first address range (needs peering_enabled)"
   type        = string
-  default     = null
+  default     = "*"
 
   validation {
-    condition     = var.allowed_ssh_source == null || (can(cidrhost(var.allowed_ssh_source, 0)) && !contains(["0.0.0.0/0"], coalesce(var.allowed_ssh_source, "-")))
-    error_message = "allowed_ssh_source must be a CIDR block such as \"10.0.0.0/16\"; \"*\" and \"0.0.0.0/0\" are not allowed."
+    condition     = var.allowed_ssh_source == null || var.allowed_ssh_source == "*" || can(cidrhost(coalesce(var.allowed_ssh_source, "-"), 0))
+    error_message = "allowed_ssh_source must be \"*\", a CIDR block such as \"10.0.0.0/16\", or null."
+  }
+
+  validation {
+    condition     = var.allowed_ssh_source != null || var.peering_enabled
+    error_message = "allowed_ssh_source can only be null when peering_enabled is true."
   }
 }
 
@@ -26,16 +31,34 @@ variable "k8s_version" {
   }
 }
 
+variable "kv_purge_protection_enabled" {
+  description = "Block purging of the Key Vault until the retention period ends. Cannot be turned off once enabled."
+  type        = bool
+  default     = false
+}
+
 variable "kv_sku_name" {
-  description = "SKU of the Key Vault (standard or premium)"
+  description = "SKU of the Key Vault: \"standard\" or \"premium\""
   type        = string
   default     = "standard"
+}
+
+variable "kv_soft_delete_retention_days" {
+  description = "Days a deleted Key Vault is kept before it can be purged (7-90)"
+  type        = number
+  default     = 7
 }
 
 variable "location" {
   description = "Azure region for resources"
   type        = string
   default     = "eastus2"
+}
+
+variable "master_public_ip_enabled" {
+  description = "Give the master a public IP so it (and the workers, through it) can be reached without the peered VNet"
+  type        = bool
+  default     = true
 }
 
 variable "master_vm_name" {
@@ -95,6 +118,12 @@ variable "peer_vnet_resource_group" {
   default     = "devops-group"
 }
 
+variable "peering_enabled" {
+  description = "Peer the cluster VNet with the existing VNet named by peer_vnet_name and peer_vnet_resource_group"
+  type        = bool
+  default     = false
+}
+
 variable "resource_group_name" {
   description = "Name of the resource group"
   type        = string
@@ -141,7 +170,7 @@ variable "tags" {
 }
 
 variable "vnet_address_space" {
-  description = "Address space for the virtual network; must not overlap the peer VNet"
+  description = "Address space for the virtual network; must not overlap the peer VNet when peering_enabled is true"
   type        = list(string)
   default     = ["10.1.0.0/16"]
 }
